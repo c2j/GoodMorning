@@ -29,6 +29,8 @@ rustls = [
 ]
 vsock = ["dep:tokio-vsock"]
 http3 = ["dep:h3", "dep:h3-quinn", "dep:quinn-proto", "dep:quinn", "dep:http"]
+spider_page = ["spider", "reqwest", "regex"]
+spider_smart = ["spider_page", "spider/smart"]
 
 [dependencies]
 anyhow = "1.0.86"
@@ -83,12 +85,20 @@ tokio-vsock = { version = "0.7.2", optional = true }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 num_cpus = "1.16.0"
 tokio-util = "0.7.13"
+reqwest = { version = "0.12", features = ["stream"], optional = true }
+regex = { version = "1", optional = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.10.1"
+
+[dependencies.spider]
+path = "./crate_spider/spider"
+default-features = false
+features = ["time", "full_resources"]
+optional = true
 
 [dev-dependencies]
 axum = { version = "0.8.1", features = ["http2"] }

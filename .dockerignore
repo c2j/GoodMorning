@@ -1,5 +1,12 @@
-*
 
-!pgo
-!src
-!Cargo.*
+
+target/
+.claude
+.github
+dist
+docs
+example_website
+logs
+scripts
+tests
+crate_spider

@@ -13,12 +13,14 @@ use printer::{PrintConfig, PrintMode};
 use rand_regex::Regex;
 use ratatui::crossterm;
 use result_data::ResultData;
+use std::io::Write;
 use std::{
     env,
     fs::File,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     pin::Pin,
+    str::FromStr,
     sync::Arc,
 };
 use timescale::TimeScale;
@@ -41,6 +43,11 @@ mod result_data;
 mod timescale;
 mod tls_config;
 mod url_generator;
+
+#[cfg(feature = "spider_page")]
+mod spider_http;
+#[cfg(feature = "spider_smart")]
+mod spider_chrome_manager;
 
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
@@ -150,7 +157,7 @@ Note: If qps is specified, burst will be ignored",
     latency_correction: bool,
     #[arg(help = "No realtime tui", long = "no-tui")]
     no_tui: bool,
-    #[arg(help = "Frame per second for tui.", default_value = "16", long = "fps")]
+    #[arg(help = "Frame per second for tui.", default_value = "4", long = "fps")]
     fps: usize,
     #[arg(
         help = "HTTP method",
@@ -320,10 +327,193 @@ Note: if used several times for the same host:port:target_host:target_port, a ra
         short = 'u'
     )]
     time_unit: Option<TimeScale>,
+
+    #[arg(
+        help = "Page loader to use. Available values: http (default), spider",
+        long = "page-loader",
+        default_value = "http"
+    )]
+    page_loader: PageLoader,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Spider mode for page loading. Available values: http (default), smart",
+        long = "spider-mode",
+        default_value = "http"
+    )]
+    spider_mode: SpiderMode,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Record page resources granularity. Available values: off (default), summary, full",
+        long = "page-resources",
+        default_value = "off"
+    )]
+    page_resources: PageResources,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Timeout for page loading. Default to infinite.",
+        long = "page-timeout"
+    )]
+    page_timeout: Option<humantime::Duration>,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Run Chrome in headless mode for SMART mode",
+        long = "spider-headless",
+        default_value = "true",
+        action = clap::ArgAction::Set
+    )]
+    spider_headless: bool,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Chrome remote debugging URL for SMART mode (e.g., http://localhost:9222)",
+        long = "chrome-url"
+    )]
+    chrome_url: Option<String>,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Path to Chrome/Chromium executable for SMART mode (e.g., /usr/bin/chromium-browser). If not specified, uses system default or CHROME_BIN environment variable",
+        long = "chrome-bin"
+    )]
+    chrome_bin: Option<String>,
+
+    #[cfg(feature = "spider_page")]
+    #[arg(
+        help = "Disable Chrome cache in SMART mode (default: enabled)",
+        long = "spider-disable-cache",
+        default_value = "false"
+    )]
+    spider_disable_cache: bool,
+}
+
+/// Page loader types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageLoader {
+    Http,
+    #[cfg(feature = "spider_page")]
+    Spider,
+}
+
+impl Default for PageLoader {
+    fn default() -> Self {
+        PageLoader::Http
+    }
+}
+
+impl FromStr for PageLoader {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "http" => Ok(PageLoader::Http),
+            #[cfg(feature = "spider_page")]
+            "spider" => Ok(PageLoader::Spider),
+            _ => Err(format!(
+                "Invalid page loader: {}. Available values: http",
+                s
+            )),
+        }
+    }
+}
+
+/// Spider execution modes
+#[cfg(feature = "spider_page")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpiderMode {
+    Http,
+    Smart,
+}
+
+#[cfg(feature = "spider_page")]
+impl Default for SpiderMode {
+    fn default() -> Self {
+        SpiderMode::Http
+    }
+}
+
+#[cfg(feature = "spider_page")]
+impl FromStr for SpiderMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "http" => Ok(SpiderMode::Http),
+            "smart" => Ok(SpiderMode::Smart),
+            _ => Err(format!(
+                "Invalid spider mode: {}. Available values: http, smart",
+                s
+            )),
+        }
+    }
+}
+
+/// Resource recording granularity
+#[cfg(feature = "spider_page")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageResources {
+    Off,
+    Summary,
+    Full,
+}
+
+#[cfg(feature = "spider_page")]
+impl Default for PageResources {
+    fn default() -> Self {
+        PageResources::Off
+    }
+}
+
+/// Spider-related options extracted before opts is moved
+#[cfg(feature = "spider_page")]
+pub struct SpiderOptions {
+    pub page_loader: PageLoader,
+    pub page_timeout: Option<humantime::Duration>,
+    pub spider_mode: SpiderMode,
+    pub page_resources: PageResources,
+    pub spider_headless: bool,
+    pub chrome_url: Option<String>,
+    pub chrome_bin: Option<String>,
+    pub disable_cache: bool,
+}
+
+#[cfg(feature = "spider_page")]
+impl FromStr for PageResources {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "off" => Ok(PageResources::Off),
+            "summary" => Ok(PageResources::Summary),
+            "full" => Ok(PageResources::Full),
+            _ => Err(format!(
+                "Invalid page resources: {}. Available values: off, summary, full",
+                s
+            )),
+        }
+    }
 }
 
 pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
     let work_mode = opts.work_mode();
+
+    // Extract spider-related options early before opts is moved
+    #[cfg(feature = "spider_page")]
+    let spider_opts = Some(crate::SpiderOptions {
+        page_loader: opts.page_loader,
+        page_timeout: opts.page_timeout,
+        spider_mode: opts.spider_mode,
+        page_resources: opts.page_resources,
+        spider_headless: opts.spider_headless,
+        chrome_url: opts.chrome_url,
+        chrome_bin: opts.chrome_bin,
+        disable_cache: opts.spider_disable_cache,
+    });
+    #[cfg(not(feature = "spider_page"))]
+    let spider_opts: Option<std::option::Option<()>> = None;
 
     // Parse AWS credentials from basic auth if AWS signing is requested
     let aws_config = if let Some(signing_params) = opts.aws_sigv4 {
@@ -563,6 +753,7 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
     };
 
     let url = url.into_owned();
+
     let client = Arc::new(client::Client {
         request_generator: RequestGenerator {
             url_generator,
@@ -649,6 +840,13 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
 
     let data_collect_future: Pin<Box<dyn std::future::Future<Output = (ResultData, PrintConfig)>>> =
         match work_mode {
+            #[cfg(feature = "spider_page")]
+            WorkMode::Debug if spider_opts.as_ref().map(|o| o.page_loader) == Some(PageLoader::Spider) => {
+                let mut print_config = print_config;
+                let url = opts.url.clone();
+                crate::spider_http::spider_work_debug(&mut print_config.output, &url, spider_opts.as_ref()).await?;
+                return Ok(());
+            }
             WorkMode::Debug => {
                 let mut print_config = print_config;
                 client::work_debug(&mut print_config.output, client).await?;
@@ -660,8 +858,8 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                 n_http2_parallel,
                 query_limit: None,
                 latency_correction: _,
-            } if no_tui => {
-                // Use optimized worker of no_tui mode.
+            } if no_tui && spider_opts.as_ref().map(|o| o.page_loader) != Some(PageLoader::Spider) => {
+                // Use optimized worker of no_tui mode (but not for Spider mode).
                 let (result_tx, result_rx) = kanal::unbounded();
 
                 client::fast::work(
@@ -688,8 +886,8 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                 query_limit: None,
                 latency_correction: _,
                 wait_ongoing_requests_after_deadline,
-            } if no_tui => {
-                // Use optimized worker of no_tui mode.
+            } if no_tui && spider_opts.as_ref().map(|o| o.page_loader) != Some(PageLoader::Spider) => {
+                // Use optimized worker of no_tui mode (but not for Spider mode).
                 let (result_tx, result_rx) = kanal::unbounded();
 
                 client::fast::work_until(
@@ -711,10 +909,25 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                 })
             }
             mode => {
+                // Note: Chrome instances are now created per-worker in spider_work_with_chrome()
+                // This ensures n_connections Chrome processes for -c n_connections
+                #[cfg(feature = "spider_smart")]
+                let pre_created_chrome_manager: Option<Arc<crate::spider_chrome_manager::ChromeManager>> = None;
+                #[cfg(not(feature = "spider_smart"))]
+                let pre_created_chrome_manager: Option<Arc<()>> = None;
+
                 let (result_tx, result_rx) = kanal::unbounded();
+
+                // Keep ChromeManager alive throughout the entire operation
+                let chrome_manager_for_lifecycle = pre_created_chrome_manager.clone();
+
+                // For TUI mode, we need to run Monitor and spider_work together
+                // Use a cancellation token to coordinate between them
+                let cancel_token = tokio_util::sync::CancellationToken::new();
+                let cancel_token_for_monitor = cancel_token.clone();
+
                 let data_collector = if no_tui {
                     // When `--no-tui` is enabled, just collect all data.
-
                     let token = tokio_util::sync::CancellationToken::new();
                     let result_rx_ctrl_c = result_rx.clone();
                     let token_ctrl_c = token.clone();
@@ -733,44 +946,77 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                             _ = token_ctrl_c.cancelled() => {
                                 print_config
                             }
-
                         }
                     });
 
                     Box::pin(async move {
-                        token.cancel();
-                        let config = ctrl_c.await.unwrap();
+                        // First, collect all results
                         let mut all = ResultData::default();
                         while let Ok(res) = result_rx.recv() {
                             all.push(res);
                         }
+
+                        // Then cancel and wait for ctrl_c task
+                        token.cancel();
+                        let config = ctrl_c.await.unwrap();
+
                         (all, config)
                     })
                         as Pin<Box<dyn std::future::Future<Output = (ResultData, PrintConfig)>>>
                 } else {
-                    // Spawn monitor future which draws realtime tui
-                    let join_handle = tokio::spawn(
-                        monitor::Monitor {
+                    // TUI mode: Spawn monitor in a separate task
+                    let join_handle = tokio::spawn(async move {
+                        let monitor = monitor::Monitor {
                             print_config,
                             end_line: opts
                                 .duration
                                 .map(|d| monitor::EndLine::Duration(d.into()))
                                 .unwrap_or(monitor::EndLine::NumQuery(opts.n_requests)),
-                            report_receiver: result_rx,
+                            report_receiver: result_rx.clone(),
                             start,
                             fps: opts.fps,
                             disable_color: opts.disable_color,
                             time_unit: opts.time_unit,
-                        }
-                        .monitor(),
-                    );
+                        };
 
-                    Box::pin(async { join_handle.await.unwrap().unwrap() })
+                        // Run monitor with cancellation support
+                        let monitor_result = tokio::select! {
+                            result = monitor.monitor() => result,
+                            _ = cancel_token_for_monitor.cancelled() => Ok((ResultData::default(), PrintConfig {
+                                mode: printer::PrintMode::default(),
+                                output: Box::new(std::io::stdout()),
+                                disable_style: false,
+                                stats_success_breakdown: false,
+                                time_unit: None,
+                            })),
+                        };
+
+                        monitor_result
+                    });
+
+                    // Return a future that just awaits the monitor
+                    Box::pin(async move {
+                        let (result_data, print_config) = join_handle.await.unwrap().unwrap();
+                        (result_data, print_config)
+                    })
                         as Pin<Box<dyn std::future::Future<Output = (ResultData, PrintConfig)>>>
-                };
+                }; // End of data_collector
 
                 match mode {
                     WorkMode::Debug => unreachable!("Must be already handled"),
+                    #[cfg(feature = "spider_page")]
+                    WorkMode::FixedNumber {
+                        n_requests,
+                        n_connections,
+                        n_http2_parallel,
+                        query_limit: _,
+                        latency_correction: _,
+                    } if spider_opts.as_ref().map(|o| o.page_loader) == Some(PageLoader::Spider) => {
+                        // Use Spider mode instead of HTTP client
+                        // Use pre-created ChromeManager to ensure it outlives the Monitor task
+                        let chrome_manager = pre_created_chrome_manager.clone();
+                        crate::spider_http::spider_work_with_chrome(&opts.url, result_tx, n_requests, n_connections, spider_opts.as_ref(), chrome_manager).await;
+                    }
                     WorkMode::FixedNumber {
                         n_requests,
                         n_connections,
@@ -809,6 +1055,28 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                                 n_http2_parallel,
                             )
                             .await;
+                        }
+                    }
+                    #[cfg(feature = "spider_page")]
+                    WorkMode::Until {
+                        duration,
+                        n_connections,
+                        n_http2_parallel: _,
+                        query_limit: _,
+                        latency_correction: _,
+                        wait_ongoing_requests_after_deadline: _,
+                    } if spider_opts.as_ref().map(|o| o.page_loader) == Some(PageLoader::Spider) => {
+                        // Use Spider mode with time-based duration
+                        let dead_line = start + duration;
+                        // Use pre-created ChromeManager to ensure it outlives the Monitor task
+                        let chrome_manager = pre_created_chrome_manager.clone();
+                        #[cfg(feature = "spider_smart")]
+                        crate::spider_http::spider_work_until_with_chrome(&opts.url, result_tx, dead_line, n_connections, spider_opts.as_ref(), chrome_manager).await;
+                        #[cfg(not(feature = "spider_smart"))]
+                        {
+                            // For non-smart mode, fall back to fixed number
+                            let tasks = opts.n_requests;
+                            crate::spider_http::spider_work_with_chrome(&opts.url, result_tx, tasks, n_connections, spider_opts.as_ref(), chrome_manager).await;
                         }
                     }
                     WorkMode::Until {
@@ -857,6 +1125,27 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                             .await;
                         }
                     }
+                }
+
+                // Explicitly shutdown Chrome if it was used in SMART mode
+                // This ensures all Chrome processes are terminated before the program exits
+                #[cfg(feature = "spider_smart")]
+                if let Some(chrome_manager) = chrome_manager_for_lifecycle {
+                    if let Err(e) = chrome_manager.shutdown().await {
+                        eprintln!("Warning: Failed to shutdown Chrome cleanly: {}", e);
+                    } else {
+                        // Log successful shutdown
+                        if let Ok(mut log) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("logs/chrome_manager.log") {
+                            use std::io::Write;
+                            let _ = log.write_all(format!("[{}] Chrome shutdown completed successfully\n",
+                                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")).as_bytes());
+                        }
+                    }
+                    // Give Chrome processes time to fully terminate
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                 }
 
                 data_collector

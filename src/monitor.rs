@@ -392,6 +392,21 @@ impl Monitor {
                 f.render_widget(resp_histo, bottom[1]);
             })?;
 
+            // Check if duration has elapsed and break if so
+            if let EndLine::Duration(d) = &self.end_line {
+                if now - self.start >= *d {
+                    drop(terminal);
+                    drop(raw_mode);
+                    let _ = crate::printer::print_result(
+                        self.print_config,
+                        self.start,
+                        &all,
+                        now - self.start,
+                    );
+                    std::process::exit(libc::EXIT_SUCCESS);
+                }
+            }
+
             while crossterm::event::poll(std::time::Duration::from_secs(0))? {
                 match crossterm::event::read()? {
                     Event::Key(KeyEvent {

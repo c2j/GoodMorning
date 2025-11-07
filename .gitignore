@@ -1,3 +1,15 @@
 **/target
 /.idea
 /.vscode
+
+.github
+.claude
+.root_claude
+crate_spider
+dist
+docs
+example_website
+logs
+scripts
+tests
+Dockerfile.uos

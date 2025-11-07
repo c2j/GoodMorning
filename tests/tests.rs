@@ -1358,3 +1358,366 @@ async fn test_body_path_lines() {
     // test failure rate should be very low
     assert!(counts.iter().all(|&c| c > 0));
 }
+
+// ============================================================================
+// Spider Mode Tests
+// ============================================================================
+
+#[cfg(feature = "spider_page")]
+mod spider_tests {
+    use super::*;
+    use axum::routing::get;
+    use std::sync::Arc;
+
+    /// Helper function to create a test HTML page server
+    async fn create_spider_test_server() -> (tokio::net::TcpListener, u16, String) {
+        let (listener, port) = super::bind_port_and_increment().await;
+
+        let html_content = include_str!("spider_test_page.html");
+        let html = Arc::new(html_content.to_string());
+
+        let app = Router::new()
+            .route("/", {
+                let html = html.clone();
+                get(move || {
+                    let html = html.clone();
+                    async move {
+                        axum::response::Html(html.to_string())
+                    }
+                })
+            })
+            .route("/api/test-data", get(|| async {
+                axum::Json(serde_json::json!({
+                    "status": "ok",
+                    "message": "Test data"
+                }))
+            }));
+
+        let url = format!("http://127.0.0.1:{}", port);
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        // Give server time to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        (tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(), port, url)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spider_http_mode_basic() {
+        let (_listener, _port, url) = create_spider_test_server().await;
+
+        let args = vec![
+            "--page-loader", "spider",
+            "--spider-mode", "http",
+            "-n", "1",
+            &url,
+        ];
+
+        let opts = oha::Opts::parse_from(
+            ["oha", "--no-tui", "--output-format", "quiet"]
+                .into_iter()
+                .chain(args.into_iter()),
+        );
+
+        // Should complete without error
+        oha::run(opts).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spider_http_mode_multiple_requests() {
+        let (_listener, _port, url) = create_spider_test_server().await;
+
+        let args = vec![
+            "--page-loader", "spider",
+            "--spider-mode", "http",
+            "-n", "5",
+            "-c", "2",
+            &url,
+        ];
+
+        let opts = oha::Opts::parse_from(
+            ["oha", "--no-tui", "--output-format", "quiet"]
+                .into_iter()
+                .chain(args.into_iter()),
+        );
+
+        oha::run(opts).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spider_http_mode_with_timeout() {
+        let (_listener, _port, url) = create_spider_test_server().await;
+
+        let args = vec![
+            "--page-loader", "spider",
+            "--spider-mode", "http",
+            "--page-timeout", "10s",
+            "-n", "2",
+            &url,
+        ];
+
+        let opts = oha::Opts::parse_from(
+            ["oha", "--no-tui", "--output-format", "quiet"]
+                .into_iter()
+                .chain(args.into_iter()),
+        );
+
+        oha::run(opts).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spider_http_mode_json_output() {
+        let (_listener, _port, url) = create_spider_test_server().await;
+
+        let temp_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+
+        let args = vec![
+            "--page-loader", "spider",
+            "--spider-mode", "http",
+            "-n", "3",
+            &url,
+            "--output", temp_path.to_str().unwrap(),
+            "--output-format", "json",
+        ];
+
+        let opts = oha::Opts::parse_from(
+            ["oha", "--no-tui"]
+                .into_iter()
+                .chain(args.into_iter()),
+        );
+
+        oha::run(opts).await.unwrap();
+
+        // Verify JSON output exists and is valid
+        let output = std::fs::read_to_string(&temp_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        // Basic validation
+        assert!(json.get("summary").is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spider_debug_mode() {
+        let (_listener, _port, url) = create_spider_test_server().await;
+
+        let temp_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+
+        let args = vec![
+            "--page-loader", "spider",
+            "--spider-mode", "http",
+            "--debug",
+            &url,
+            "--output", temp_path.to_str().unwrap(),
+        ];
+
+        let opts = oha::Opts::parse_from(
+            ["oha", "--no-tui"]
+                .into_iter()
+                .chain(args.into_iter()),
+        );
+
+        oha::run(opts).await.unwrap();
+
+        // Verify debug output contains expected information
+        let output = std::fs::read_to_string(&temp_path).unwrap();
+        assert!(output.contains("Page Load Result:"));
+        assert!(output.contains("Duration:"));
+        assert!(output.contains("Bytes Total:"));
+    }
+
+    // SMART mode tests - only run if spider_smart feature is enabled
+    #[cfg(feature = "spider_smart")]
+    mod smart_tests {
+        use super::*;
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore] // Ignore by default as it requires Chrome to be installed
+        async fn test_spider_smart_mode_basic() {
+            let (_listener, _port, url) = create_spider_test_server().await;
+
+            let args = vec![
+                "--page-loader", "spider",
+                "--spider-mode", "smart",
+                "--spider-headless",
+                "-n", "1",
+                &url,
+            ];
+
+            let opts = oha::Opts::parse_from(
+                ["oha", "--no-tui", "--output-format", "quiet"]
+                    .into_iter()
+                    .chain(args.into_iter()),
+            );
+
+            // Should complete without error if Chrome is available
+            match oha::run(opts).await {
+                Ok(_) => {
+                    // Success - Chrome is available
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    // Allow failure if Chrome is not installed
+                    if err_msg.contains("Chrome") || err_msg.contains("browser") {
+                        eprintln!("Skipping test - Chrome not available: {}", err_msg);
+                    } else {
+                        panic!("Unexpected error: {}", e);
+                    }
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore] // Ignore by default as it requires Chrome to be installed
+        async fn test_spider_smart_mode_no_tui() {
+            let (_listener, _port, url) = create_spider_test_server().await;
+
+            let args = vec![
+                "--page-loader", "spider",
+                "--spider-mode", "smart",
+                "--spider-headless",
+                "--no-tui",
+                "-n", "3",
+                "-c", "2",
+                &url,
+            ];
+
+            let opts = oha::Opts::parse_from(
+                ["oha", "--output-format", "quiet"]
+                    .into_iter()
+                    .chain(args.into_iter()),
+            );
+
+            match oha::run(opts).await {
+                Ok(_) => {
+                    // Success
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Chrome") || err_msg.contains("browser") {
+                        eprintln!("Skipping test - Chrome not available: {}", err_msg);
+                    } else {
+                        panic!("Unexpected error: {}", e);
+                    }
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore] // Ignore by default as it requires Chrome to be installed
+        async fn test_spider_smart_mode_with_cache_disabled() {
+            let (_listener, _port, url) = create_spider_test_server().await;
+
+            let args = vec![
+                "--page-loader", "spider",
+                "--spider-mode", "smart",
+                "--spider-headless",
+                "--spider-disable-cache",
+                "-n", "2",
+                &url,
+            ];
+
+            let opts = oha::Opts::parse_from(
+                ["oha", "--no-tui", "--output-format", "quiet"]
+                    .into_iter()
+                    .chain(args.into_iter()),
+            );
+
+            match oha::run(opts).await {
+                Ok(_) => {
+                    // Success
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Chrome") || err_msg.contains("browser") {
+                        eprintln!("Skipping test - Chrome not available: {}", err_msg);
+                    } else {
+                        panic!("Unexpected error: {}", e);
+                    }
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore] // Ignore by default as it requires Chrome to be installed
+        async fn test_spider_smart_mode_json_output() {
+            let (_listener, _port, url) = create_spider_test_server().await;
+
+            let temp_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+
+            let args = vec![
+                "--page-loader", "spider",
+                "--spider-mode", "smart",
+                "--spider-headless",
+                "-n", "2",
+                &url,
+                "--output", temp_path.to_str().unwrap(),
+                "--output-format", "json",
+            ];
+
+            let opts = oha::Opts::parse_from(
+                ["oha", "--no-tui"]
+                    .into_iter()
+                    .chain(args.into_iter()),
+            );
+
+            match oha::run(opts).await {
+                Ok(_) => {
+                    // Verify JSON output
+                    let output = std::fs::read_to_string(&temp_path).unwrap();
+                    let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+                    assert!(json.get("summary").is_some());
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Chrome") || err_msg.contains("browser") {
+                        eprintln!("Skipping test - Chrome not available: {}", err_msg);
+                    } else {
+                        panic!("Unexpected error: {}", e);
+                    }
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore] // Ignore by default as it requires Chrome to be installed
+        async fn test_spider_smart_debug_mode() {
+            let (_listener, _port, url) = create_spider_test_server().await;
+
+            let temp_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+
+            let args = vec![
+                "--page-loader", "spider",
+                "--spider-mode", "smart",
+                "--spider-headless",
+                "--debug",
+                &url,
+                "--output", temp_path.to_str().unwrap(),
+            ];
+
+            let opts = oha::Opts::parse_from(
+                ["oha", "--no-tui"]
+                    .into_iter()
+                    .chain(args.into_iter()),
+            );
+
+            match oha::run(opts).await {
+                Ok(_) => {
+                    // Verify debug output
+                    let output = std::fs::read_to_string(&temp_path).unwrap();
+                    assert!(output.contains("Page Load Result:"));
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Chrome") || err_msg.contains("browser") {
+                        eprintln!("Skipping test - Chrome not available: {}", err_msg);
+                    } else {
+                        panic!("Unexpected error: {}", e);
+                    }
+                }
+            }
+        }
+    }
+}

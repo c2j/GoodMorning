@@ -203,6 +203,10 @@ pub enum ClientError {
     #[cfg(feature = "http3")]
     #[error(transparent)]
     Http3(#[from] crate::client_h3::Http3Error),
+
+    #[cfg(feature = "spider_page")]
+    #[error("Spider error: {0}")]
+    SpiderError(String),
 }
 
 pub struct Client {
