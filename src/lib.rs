@@ -926,8 +926,11 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                 let cancel_token = tokio_util::sync::CancellationToken::new();
                 let cancel_token_for_monitor = cancel_token.clone();
 
-                let data_collector = if no_tui {
-                    // When `--no-tui` is enabled, just collect all data.
+                // Check if this is Spider mode (no-tui optimization for Spider)
+                let is_spider_mode = spider_opts.as_ref().map(|o| o.page_loader) == Some(PageLoader::Spider);
+
+                let data_collector = if no_tui && !is_spider_mode {
+                    // When `--no-tui` is enabled for HTTP mode, use optimized path
                     let token = tokio_util::sync::CancellationToken::new();
                     let result_rx_ctrl_c = result_rx.clone();
                     let token_ctrl_c = token.clone();
@@ -961,6 +964,19 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
                         let config = ctrl_c.await.unwrap();
 
                         (all, config)
+                    })
+                        as Pin<Box<dyn std::future::Future<Output = (ResultData, PrintConfig)>>>
+                } else if no_tui && is_spider_mode {
+                    // Optimized no-tui path for Spider mode (simplified, no Ctrl+C monitor task)
+                    Box::pin(async move {
+                        // Directly collect all results without spawning a Ctrl+C monitor task
+                        // This reduces overhead for Spider mode in no-tui
+                        let mut all = ResultData::default();
+                        while let Ok(res) = result_rx.recv() {
+                            all.push(res);
+                        }
+
+                        (all, print_config)
                     })
                         as Pin<Box<dyn std::future::Future<Output = (ResultData, PrintConfig)>>>
                 } else {

@@ -13,3 +13,4 @@ logs
 scripts
 tests
 Dockerfile.uos
+chrome-linux

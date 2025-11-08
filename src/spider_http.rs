@@ -14,9 +14,6 @@ use rand::{RngCore, SeedableRng};
 #[cfg(feature = "spider_page")]
 use url::Url;
 
-#[cfg(feature = "spider_smart")]
-use reqwest::StatusCode;
-
 /// Page load result containing aggregated metrics
 #[cfg(feature = "spider_page")]
 pub struct PageLoadResult {
@@ -24,6 +21,14 @@ pub struct PageLoadResult {
     pub bytes_total: usize,
     pub success: bool,
     pub resources: Vec<ResourceInfo>,
+    /// DNS lookup time (if available from Chrome)
+    pub dns_lookup: Option<Duration>,
+    /// TCP connection time (if available from Chrome)
+    pub tcp_connection: Option<Duration>,
+    /// Time to first byte (if available from Chrome)
+    pub first_byte: Option<Duration>,
+    /// Time to DOM ready (if available from Chrome)
+    pub dom_ready: Option<Duration>,
 }
 
 /// Information about a resource loaded by the page
@@ -63,7 +68,7 @@ pub async fn load_page_with_chrome(
         }
         crate::SpiderMode::Smart => {
             if let Some(chrome_mgr) = chrome_manager {
-                load_page_smart_with_chrome(url, timeout, chrome_mgr).await
+                load_page_smart_with_chrome(url, timeout, chrome_mgr, spider_opts).await
             } else {
                 load_page_smart(url, timeout, spider_opts).await
             }
@@ -145,6 +150,10 @@ async fn load_page_http(
         bytes_total,
         success: page_status >= 200 && page_status < 300,
         resources,
+        dns_lookup: None,
+        tcp_connection: None,
+        first_byte: None,
+        dom_ready: None,
     })
 }
 
@@ -271,9 +280,9 @@ async fn load_page_smart_with_chrome(
     url: &Url,
     timeout: Option<Duration>,
     chrome_manager: &ChromeManager,
+    spider_opts: Option<&crate::SpiderOptions>,
 ) -> Result<PageLoadResult, ClientError> {
     use tokio::time::Duration as TokioDuration;
-    use spider::chromiumoxide::cdp::browser_protocol::network::SetCacheDisabledParams;
 
     let start = Instant::now();
     let timeout_duration = timeout.unwrap_or(TokioDuration::from_secs(30));
@@ -284,20 +293,23 @@ async fn load_page_smart_with_chrome(
         .await
         .map_err(|e| ClientError::SpiderError(e.to_string()))?;
 
-    // Disable cache if requested via CDP command
-    if chrome_manager.is_cache_disabled() {
-        let _ = page.execute(SetCacheDisabledParams::new(true)).await;
-    }
+    // Check if we should collect resources based on page_resources setting
+    let should_collect_resources = spider_opts
+        .and_then(|o| Some(o.page_resources != crate::PageResources::Off))
+        .unwrap_or(false);
 
     // Ensure page is closed when done
     let page_result = async {
+        let status_code = 200u16; // Default status code
+        let main_document_url = url.to_string();
+
         // Navigate to the URL with timeout
         let html_result = tokio::time::timeout(timeout_duration, async {
             page.goto(url.as_str())
                 .await
                 .map_err(|e| ClientError::SpiderError(format!("Failed to navigate: {}", e)))?;
 
-            // Wait for page to load
+            // Wait for page to load or timeout
             page.wait_for_navigation()
                 .await
                 .map_err(|e| ClientError::SpiderError(format!("Failed to wait for navigation: {}", e)))?;
@@ -311,21 +323,32 @@ async fn load_page_smart_with_chrome(
         let html = html_result?;
         let bytes = html.into_bytes();
 
-        // Note: chromiumoxide::Page doesn't expose the HTTP status code directly
-        // In a full Spider crawl, the Website infrastructure tracks this,
-        // but for simplified direct page loads we default to 200
-        // The status code check is still performed in collect_smart_page_result
-        // when using the full Website.crawl() infrastructure
-        let status_code = 200;
-
         let end = Instant::now();
         let duration = end - start;
 
+        // For now, we collect basic information only
+        let resources = if should_collect_resources {
+            vec![ResourceInfo {
+                url: main_document_url,
+                size: bytes.len(),
+                duration,
+                status: status_code,
+                content_type: Some("text/html".to_string()),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        // Note: DNS, TCP, and DOM Ready times would require additional CDP domains
         Ok(PageLoadResult {
             duration,
             bytes_total: bytes.len(),
             success: status_code >= 200 && status_code < 300,
-            resources: Vec::new(), // Could be enhanced to collect resources
+            resources,
+            dns_lookup: None,
+            tcp_connection: None,
+            first_byte: None,
+            dom_ready: None,
         })
     };
 
@@ -342,14 +365,12 @@ async fn load_page_smart_with_chrome(
 /// Collect results from SMART mode crawl
 #[cfg(feature = "spider_smart")]
 async fn collect_smart_page_result(
-    mut website: spider::website::Website,
+    website: spider::website::Website,
     start: Instant,
-    timeout: Option<Duration>,
+    _timeout: Option<Duration>,
 ) -> Result<PageLoadResult, ClientError> {
-    use tokio::time::Duration as TokioDuration;
-
     let mut bytes_total = 0;
-    let mut resources = Vec::new();
+    let resources = Vec::new();
     let mut success = true;
 
     let pages = website.get_pages();
@@ -360,12 +381,7 @@ async fn collect_smart_page_result(
                 bytes_total += content.len();
             }
 
-            // In SMART mode, we can get more detailed information from Chrome
-            // For now, we'll collect what we can from the page structure
-            // The actual resource collection would be done through Chrome DevTools Protocol
-
             // Check if page loaded successfully
-            // Only consider 200-299 as successful
             if first_page.status_code.as_u16() < 200 || first_page.status_code.as_u16() >= 300 {
                 success = false;
             }
@@ -380,6 +396,10 @@ async fn collect_smart_page_result(
         bytes_total,
         success,
         resources,
+        dns_lookup: None,
+        tcp_connection: None,
+        first_byte: None,
+        dom_ready: None,
     })
 }
 
@@ -508,6 +528,7 @@ pub async fn spider_work_with_chrome(
     let headless = spider_opts.map(|o| o.spider_headless).unwrap_or(true);
     let disable_cache = spider_opts.map(|o| o.disable_cache).unwrap_or(false);
     let chrome_bin = spider_opts.and_then(|o| o.chrome_bin.clone());
+    let page_resources = spider_opts.map(|o| o.page_resources).unwrap_or(crate::PageResources::Off);
 
     // For SMART mode: Create one Chrome instance per connection (n_connections Chrome processes)
     // For HTTP mode: No Chrome needed
@@ -539,13 +560,26 @@ pub async fn spider_work_with_chrome(
             let url = url.clone();
             let timeout = timeout;
             let mode = mode;
+            let page_resources = page_resources;
+            let headless = headless;
+            let disable_cache = disable_cache;
             tokio::spawn(async move {
-                let mut rng: Pcg64Si = rand::SeedableRng::from_os_rng();
+                let rng: Pcg64Si = rand::SeedableRng::from_os_rng();
 
                 for _ in 0..(n_tasks / n_connections + 1) {
                     let page_result = if mode == crate::SpiderMode::Smart {
                         if let Some(ref chrome_mgr) = chrome_manager {
-                            load_page_with_chrome(&url, timeout, mode, None, Some(chrome_mgr)).await
+                            let spider_opts = crate::SpiderOptions {
+                                page_loader: crate::PageLoader::Spider,
+                                page_resources,
+                                page_timeout: None,
+                                spider_mode: mode,
+                                spider_headless: headless,
+                                disable_cache,
+                                chrome_bin: None,
+                                chrome_url: None,
+                            };
+                            load_page_with_chrome(&url, timeout, mode, Some(&spider_opts), Some(chrome_mgr)).await
                         } else {
                             // Chrome failed to launch for this worker, skip
                             eprintln!("Worker {} skipping request (no Chrome)", worker_id);
@@ -616,6 +650,7 @@ pub async fn spider_work_until_with_chrome(
     let headless = spider_opts.map(|o| o.spider_headless).unwrap_or(true);
     let disable_cache = spider_opts.map(|o| o.disable_cache).unwrap_or(false);
     let chrome_bin = spider_opts.and_then(|o| o.chrome_bin.clone());
+    let page_resources = spider_opts.map(|o| o.page_resources).unwrap_or(crate::PageResources::Off);
 
     // For SMART mode: Create one Chrome instance per connection (n_connections Chrome processes)
     // For HTTP mode: No Chrome needed
@@ -647,14 +682,27 @@ pub async fn spider_work_until_with_chrome(
             let url = url.clone();
             let timeout = timeout;
             let mode = mode;
+            let page_resources = page_resources;
+            let headless = headless;
+            let disable_cache = disable_cache;
             tokio::spawn(async move {
-                let mut rng: Pcg64Si = rand::SeedableRng::from_os_rng();
+                let rng: Pcg64Si = rand::SeedableRng::from_os_rng();
 
                 // Keep sending requests until deadline
                 while std::time::Instant::now() < dead_line {
                     let page_result = if mode == crate::SpiderMode::Smart {
                         if let Some(ref chrome_mgr) = chrome_manager {
-                            load_page_with_chrome(&url, timeout, mode, None, Some(chrome_mgr)).await
+                            let spider_opts = crate::SpiderOptions {
+                                page_loader: crate::PageLoader::Spider,
+                                page_resources,
+                                page_timeout: None,
+                                spider_mode: mode,
+                                spider_headless: headless,
+                                disable_cache,
+                                chrome_bin: None,
+                                chrome_url: None,
+                            };
+                            load_page_with_chrome(&url, timeout, mode, Some(&spider_opts), Some(chrome_mgr)).await
                         } else {
                             // Chrome failed to launch for this worker, skip
                             eprintln!("Worker {} skipping request (no Chrome)", worker_id);
