@@ -19,7 +19,7 @@ rust-version = "1.85"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["rustls"]
+default = ["rustls", "playwright"]
 native-tls = ["dep:native-tls", "dep:tokio-native-tls"]
 rustls = [
     "dep:rustls",
@@ -29,6 +29,7 @@ rustls = [
 ]
 vsock = ["dep:tokio-vsock"]
 http3 = ["dep:h3", "dep:h3-quinn", "dep:quinn-proto", "dep:quinn", "dep:http"]
+playwright = ["dep:playwright"]
 
 [dependencies]
 anyhow = "1.0.86"
@@ -83,6 +84,9 @@ tokio-vsock = { version = "0.7.2", optional = true }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 num_cpus = "1.16.0"
 tokio-util = "0.7.13"
+
+# Playwright support
+playwright = { git = "https://github.com/c2j/playwright-rust.git", branch = "Playwright-1.50+", optional = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

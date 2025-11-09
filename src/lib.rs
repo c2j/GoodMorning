@@ -42,6 +42,9 @@ mod timescale;
 mod tls_config;
 mod url_generator;
 
+#[cfg(feature = "playwright")]
+mod page_test;
+
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 
@@ -49,6 +52,9 @@ use crate::{
     cli::{ConnectToEntry, parse_header},
     request_generator::{BodyGenerator, Proxy, RequestGenerator},
 };
+
+#[cfg(feature = "playwright")]
+use crate::page_test::cli::PwArgs;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -59,7 +65,11 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[command(arg_required_else_help(true))]
 pub struct Opts {
     #[arg(help = "Target URL or file with multiple URLs.")]
-    url: String,
+    url: Option<String>,
+
+    #[cfg(feature = "playwright")]
+    #[command(flatten)]
+    pw_args: Option<PwArgs>,
     #[arg(
         help = "Number of requests to run. Accepts plain numbers or suffixes: k = 1,000, m = 1,000,000 (e.g. 10k, 1m).", 
         short = 'n',
@@ -323,6 +333,27 @@ Note: if used several times for the same host:port:target_host:target_port, a ra
 }
 
 pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
+    // Check if Playwright mode is enabled
+    #[cfg(feature = "playwright")]
+    {
+        if let Some(pw_args) = &opts.pw_args {
+            // Ensure we have either a URL or scenario file
+            if pw_args.record {
+                if let Some(url) = &opts.url {
+                    return crate::page_test::run_record_mode(pw_args.clone(), url.clone()).await;
+                } else {
+                    anyhow::bail!("URL is required for recording mode");
+                }
+            } else if pw_args.replay || pw_args.scenario_mode {
+                if let Some(scenario) = &pw_args.scenario {
+                    return crate::page_test::run_replay_mode(pw_args.clone(), scenario.clone()).await;
+                } else {
+                    anyhow::bail!("Scenario file is required for replay mode");
+                }
+            }
+        }
+    }
+
     let work_mode = opts.work_mode();
 
     // Parse AWS credentials from basic auth if AWS signing is requested
@@ -371,10 +402,15 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
     let proxy_http_version: http::Version =
         parse_http_version(opts.proxy_http2, opts.proxy_http_version.as_deref())?;
 
+    // Get URL for non-Playwright mode
+    #[cfg(feature = "playwright")]
+    let url = opts.url.expect("URL is required for non-Playwright mode");
+    #[cfg(not(feature = "playwright"))]
+    let url = opts.url;
+
     let url_generator = if opts.rand_regex_url {
         // Almost URL has dot in domain, so disable dot in regex for convenience.
-        let dot_disabled: String = opts
-            .url
+        let dot_disabled: String = url
             .chars()
             .map(|c| {
                 if c == '.' {
@@ -386,7 +422,7 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
             .collect();
         UrlGenerator::new_dynamic(Regex::compile(&dot_disabled, opts.max_repeat)?)
     } else if opts.urls_from_file {
-        let path = Path::new(opts.url.as_str());
+        let path = Path::new(&url);
         let file = File::open(path)?;
         let reader = std::io::BufReader::new(file);
 
@@ -398,7 +434,7 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
             .collect::<Result<Vec<_>, _>>()?;
         UrlGenerator::new_multi_static(urls)
     } else {
-        UrlGenerator::new_static(Url::parse(&opts.url)?)
+        UrlGenerator::new_static(Url::parse(&url)?)
     };
 
     if let Some(n) = opts.dump_urls {

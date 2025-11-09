@@ -1,0 +1,115 @@
+{
+  "version": "1.0",
+  "created": "2025-11-09T10:15:32Z",
+  "page": {
+    "url": "https://example.com",
+    "title": "Example Domain",
+    "final_url": "https://example.com"
+  },
+  "navigation": {
+    "load_event_end": 1234,
+    "dom_content_loaded": 567,
+    "first_paint": 234,
+    "first_contentful_paint": 345
+  },
+  "resources": {
+    "total_size": 156789,
+    "encoded_size": 67890,
+    "decoded_size": 123456
+  },
+  "requests": [
+    {
+      "id": "req_1",
+      "url": "https://example.com/",
+      "method": "GET",
+      "resource_type": "document",
+      "timestamp": 0,
+      "headers": {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "user-agent": "Mozilla/5.0"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/html; charset=UTF-8",
+          "content-length": "1256"
+        },
+        "body_size": 1256,
+        "duration": 234
+      }
+    },
+    {
+      "id": "req_2",
+      "url": "https://example.com/style.css",
+      "method": "GET",
+      "resource_type": "stylesheet",
+      "timestamp": 45,
+      "headers": {
+        "accept": "text/css,*/*;q=0.1"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/css"
+        },
+        "body_size": 2847,
+        "duration": 156
+      }
+    },
+    {
+      "id": "req_3",
+      "url": "https://example.com/script.js",
+      "method": "GET",
+      "resource_type": "script",
+      "timestamp": 67,
+      "headers": {
+        "accept": "*/*"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/javascript"
+        },
+        "body_size": 15234,
+        "duration": 234
+      }
+    },
+    {
+      "id": "req_4",
+      "url": "https://example.com/logo.png",
+      "method": "GET",
+      "resource_type": "image",
+      "timestamp": 123,
+      "headers": {
+        "accept": "image/avif,image/webp,image/apng,*/*;q=0.8"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "image/png"
+        },
+        "body_size": 8923,
+        "duration": 345
+      }
+    },
+    {
+      "id": "req_5",
+      "url": "https://example.com/api/data",
+      "method": "GET",
+      "resource_type": "xhr",
+      "timestamp": 234,
+      "headers": {
+        "accept": "application/json",
+        "x-requested-with": "XMLHttpRequest"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body_size": 1234,
+        "duration": 456
+      }
+    }
+  ]
+}
