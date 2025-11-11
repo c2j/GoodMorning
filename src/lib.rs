@@ -42,7 +42,7 @@ mod timescale;
 mod tls_config;
 mod url_generator;
 
-#[cfg(feature = "playwright")]
+#[cfg(feature = "headless_chrome")]
 mod page_test;
 
 #[cfg(not(target_env = "msvc"))]
@@ -53,7 +53,7 @@ use crate::{
     request_generator::{BodyGenerator, Proxy, RequestGenerator},
 };
 
-#[cfg(feature = "playwright")]
+#[cfg(feature = "headless_chrome")]
 use crate::page_test::cli::PwArgs;
 
 #[cfg(not(target_env = "msvc"))]
@@ -67,7 +67,7 @@ pub struct Opts {
     #[arg(help = "Target URL or file with multiple URLs.")]
     url: Option<String>,
 
-    #[cfg(feature = "playwright")]
+    #[cfg(feature = "headless_chrome")]
     #[command(flatten)]
     pw_args: Option<PwArgs>,
     #[arg(
@@ -333,8 +333,8 @@ Note: if used several times for the same host:port:target_host:target_port, a ra
 }
 
 pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
-    // Check if Playwright mode is enabled
-    #[cfg(feature = "playwright")]
+    // Check if Headless Chrome mode is enabled
+    #[cfg(feature = "headless_chrome")]
     {
         if let Some(pw_args) = &opts.pw_args {
             // Ensure we have either a URL or scenario file
@@ -402,10 +402,10 @@ pub async fn run(mut opts: Opts) -> anyhow::Result<()> {
     let proxy_http_version: http::Version =
         parse_http_version(opts.proxy_http2, opts.proxy_http_version.as_deref())?;
 
-    // Get URL for non-Playwright mode
-    #[cfg(feature = "playwright")]
-    let url = opts.url.expect("URL is required for non-Playwright mode");
-    #[cfg(not(feature = "playwright"))]
+    // Get URL for non-Headless Chrome mode
+    #[cfg(feature = "headless_chrome")]
+    let url = opts.url.expect("URL is required for non-Headless Chrome mode");
+    #[cfg(not(feature = "headless_chrome"))]
     let url = opts.url;
 
     let url_generator = if opts.rand_regex_url {

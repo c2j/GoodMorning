@@ -1,12 +1,15 @@
 //! Page Test Module
 //!
-//! This module provides Playwright-based page testing capabilities for OHA.
+//! This module provides Headless Chrome-based page testing capabilities for OHA.
 //! It supports recording and replaying page interactions with network monitoring.
 
 pub mod cli;
 pub mod client;
 pub mod types;
 pub mod recorder;
+
+#[cfg(test)]
+mod tests;
 
 use anyhow::Result;
 use cli::PwArgs;
@@ -17,19 +20,20 @@ pub async fn run_record_mode(pw_args: PwArgs, target_url: String) -> Result<()> 
     use std::fs::File;
     use std::io::Write;
     use chrono;
+    use serde_json::json;
 
     // Initialize Playwright client
     let client = client::PwClient::new(
         pw_args.browser,
         pw_args.headless,
-        std::time::Duration::from_millis(pw_args.timeout),
+        std::time::Duration::from_millis(pw_args.page_timeout),
     ).await?;
 
     // Create a new page
-    let page = client.new_page().await?;
+    let tab = client.new_page().await?;
 
     // Record the page
-    let result = recorder::record_page_load(&page, &target_url).await?;
+    let result = recorder::record_page_load(&tab, &target_url).await?;
 
     // Build scenario JSON
     let metrics = result.get("metrics").unwrap();
@@ -74,35 +78,155 @@ pub async fn run_record_mode(pw_args: PwArgs, target_url: String) -> Result<()> 
 
 /// Run page test in replay mode
 pub async fn run_replay_mode(pw_args: PwArgs, scenario_path: PathBuf) -> Result<()> {
-    // This function will be implemented in Phase 3
-    // It will load a scenario file and replay it with multiple concurrent users
-    let _ = pw_args;
-    let _ = scenario_path;
+    use std::fs::File;
+    use std::io::Read;
 
-    // TODO: Implement actual replay logic
-    // Steps:
-    // 1. Load scenario from file
-    // 2. Build dependency graph
-    // 3. Create browser pool
-    // 4. Execute scenarios concurrently
-    // 5. Collect and aggregate results
+    // Step 1: Load and validate scenario file
+    let scenario_content = {
+        let mut file = File::open(&scenario_path)?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        content
+    };
+
+    // Parse scenario JSON
+    let scenario: serde_json::Value = serde_json::from_str(&scenario_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse scenario file: {}", e))?;
+
+    // Validate scenario structure
+    validate_scenario(&scenario)?;
+
+    // Step 2: Extract scenario details
+    let page_url = scenario["page"]["url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid page URL in scenario"))?;
+
+    // Get concurrency settings
+    let concurrency = pw_args.max_pool_size.unwrap_or(10);
+
+    println!("Loaded scenario from: {}", scenario_path.display());
+    println!("Target page: {}", page_url);
+    println!("Concurrent users: {}", concurrency);
+    println!("\n⚠️  Replay mode is not yet fully implemented.");
+    println!("This is a framework preview. Full implementation coming in Phase 3.");
+
+    // TODO: Phase 3 implementation will include:
+    // 3. Build dependency graph from requests
+    // 4. Create browser pool with proper resource management
+    // 5. Execute scenarios concurrently with controlled rate
+    // 6. Collect and aggregate performance metrics
+    // 7. Output results in various formats (JSON, CSV, TUI)
+
+    Ok(())
+}
+
+/// Validate scenario JSON structure
+fn validate_scenario(scenario: &serde_json::Value) -> Result<()> {
+    // Check required fields
+    if !scenario.get("version").is_some() {
+        anyhow::bail!("Scenario missing 'version' field");
+    }
+    if !scenario.get("page").is_some() {
+        anyhow::bail!("Scenario missing 'page' field");
+    }
+    if !scenario.get("requests").is_some() {
+        anyhow::bail!("Scenario missing 'requests' field");
+    }
+
+    // Validate page object
+    if let Some(page) = scenario.get("page") {
+        if !page.get("url").is_some() {
+            anyhow::bail!("Scenario page missing 'url' field");
+        }
+    }
+
+    // Validate requests array
+    if let Some(requests) = scenario.get("requests").and_then(|v| v.as_array()) {
+        for (i, req) in requests.iter().enumerate() {
+            if !req.get("url").is_some() {
+                anyhow::bail!("Request {} missing 'url' field", i);
+            }
+            if !req.get("method").is_some() {
+                anyhow::bail!("Request {} missing 'method' field", i);
+            }
+        }
+    } else {
+        anyhow::bail!("Scenario 'requests' is not an array");
+    }
 
     Ok(())
 }
 
 /// Run page test in declarative mode
 pub async fn run_declarative_mode(pw_args: PwArgs, config_path: PathBuf) -> Result<()> {
-    // This function will be implemented in Phase 3
-    // It will parse a declarative JSON configuration and execute it
-    let _ = pw_args;
-    let _ = config_path;
+    use std::fs::File;
+    use std::io::Read;
 
-    // TODO: Implement actual declarative mode logic
-    // Steps:
-    // 1. Parse configuration file
-    // 2. Validate actions
-    // 3. Execute actions in order
-    // 4. Track performance metrics
+    // Step 1: Load and parse configuration file
+    let mut file = File::open(&config_path)?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+
+    let config: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse config file: {}", e))?;
+
+    // Step 2: Validate configuration structure
+    validate_declarative_config(&config)?;
+
+    // Step 3: Extract configuration details
+    let page_url = config["page"]["url"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid page URL in config"))?;
+
+    let actions_count = config["actions"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    println!("Loaded declarative config from: {}", config_path.display());
+    println!("Target page: {}", page_url);
+    println!("Actions defined: {}", actions_count);
+    println!("\n⚠️  Declarative mode is not yet fully implemented.");
+    println!("This is a framework preview. Full implementation coming in Phase 3.");
+
+    // TODO: Phase 3 implementation will include:
+    // 2. Parse and validate action sequences
+    // 3. Execute actions (navigate, click, input, wait, xhr)
+    // 4. Handle user interactions with proper timing
+    // 5. Support conditional execution and loops
+    // 6. Collect performance metrics for each action
+    // 7. Support data-driven testing from external files
+
+    Ok(())
+}
+
+/// Validate declarative configuration structure
+fn validate_declarative_config(config: &serde_json::Value) -> Result<()> {
+    // Check required fields
+    if !config.get("page").is_some() {
+        anyhow::bail!("Config missing 'page' field");
+    }
+    if !config.get("actions").is_some() {
+        anyhow::bail!("Config missing 'actions' field");
+    }
+
+    // Validate page object
+    if let Some(page) = config.get("page") {
+        if !page.get("url").is_some() {
+            anyhow::bail!("Config page missing 'url' field");
+        }
+    }
+
+    // Validate actions array
+    if let Some(actions) = config.get("actions").and_then(|v| v.as_array()) {
+        for (i, action) in actions.iter().enumerate() {
+            if !action.get("type").is_some() {
+                anyhow::bail!("Action {} missing 'type' field", i);
+            }
+        }
+    } else {
+        anyhow::bail!("Config 'actions' is not an array");
+    }
 
     Ok(())
 }

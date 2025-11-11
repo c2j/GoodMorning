@@ -1,0 +1,21 @@
+{
+  "created": "2025-11-10T17:32:17.954927236+00:00",
+  "navigation": {
+    "dom_content_loaded": 0,
+    "first_contentful_paint": 0,
+    "first_paint": 0,
+    "load_event_end": 0
+  },
+  "page": {
+    "final_url": "",
+    "title": "",
+    "url": "https://www.rust-lang.org"
+  },
+  "requests": [],
+  "resources": {
+    "decoded_size": 0,
+    "encoded_size": 0,
+    "total_size": 0
+  },
+  "version": "1.0"
+}

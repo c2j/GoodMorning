@@ -1,12 +1,12 @@
-//! CLI arguments for Playwright-based page testing
+//! CLI arguments for Headless Chrome-based page testing
 
 use clap::Parser;
 use std::path::PathBuf;
-use types::BrowserType;
+use super::types::BrowserType;
 
-/// Playwright-related arguments
-#[derive(Parser, Debug)]
-#[group(multicall = true)]
+/// Headless Chrome-related arguments
+#[derive(Parser, Debug, Clone)]
+#[group(multiple = true)]
 pub struct PwArgs {
     /// Enable recording mode
     #[arg(long = "pw-record")]
@@ -25,7 +25,7 @@ pub struct PwArgs {
     pub output: Option<PathBuf>,
 
     /// Scenario file path (replay/declarative modes)
-    #[arg(long = "pw-scenario", required_if_any(["replay", "scenario_mode"]))]
+    #[arg(long = "pw-scenario")]
     pub scenario: Option<PathBuf>,
 
     /// Browser type to use
@@ -38,7 +38,7 @@ pub struct PwArgs {
 
     /// Page timeout in milliseconds
     #[arg(long = "pw-timeout", default_value = "30000")]
-    pub timeout: u64,
+    pub page_timeout: u64,
 
     /// Maximum browser pool size
     #[arg(long = "pw-max-pool-size")]
